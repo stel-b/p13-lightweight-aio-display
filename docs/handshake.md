@@ -38,10 +38,11 @@ captured `final60` byte for byte.
 - `aio-proto`: `DeviceKey` (encrypt / recover), `random_challenge`, and
   `Auth::{Computed, Replay}` passed to `Display::connect`. The mock device
   plays the private-key side with a throwaway test key.
-- The key lives in `%ProgramData%\aio-ui\device_key.pem`, written by
-  `scripts/extract_device_key.py` from the installed driver (or the copy in
-  `research/`). It is not secret, but it comes from MSI's driver, so it is
-  git-ignored like the other extracted data.
-- The daemon and `aio-show` use the computed handshake when the key exists.
-  If it fails during authentication and `handshake.bin` exists, the daemon
-  falls back to the replay for later attempts; `aio-show --replay` forces it.
+- The key is built in (`crates/aio-proto/keys/p13_public_key.pem`,
+  `DeviceKey::p13()`): MSI's driver carries this single public key for all
+  P13s. `%ProgramData%\aio-ui\device_key.pem`, written by
+  `scripts/extract_device_key.py`, overrides it if present.
+- If the computed handshake fails during authentication and a captured
+  `handshake.bin` exists, the daemon falls back to replaying it for later
+  attempts; `aio-show --replay` forces it. Without that file there is no
+  fallback (none is needed for the built-in key).

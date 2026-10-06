@@ -1,6 +1,7 @@
 /target/
 
-# Handshake data from MSI's driver and USB captures: never commit.
+# Local captures and extracted data: never commit. (The device's public key
+# in crates/aio-proto/keys/ is committed on purpose.)
 handshake.bin
 device_key.pem
 expected_responses.bin

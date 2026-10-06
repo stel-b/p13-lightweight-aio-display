@@ -86,79 +86,89 @@ Only a small, explicit set of commands is ever sent (see the protocol docs).
 Commands found in MSI's software that write to flash or update firmware are
 deliberately not implemented.
 
-## Requirements
-
-- Windows 10 or 11, an MSI MPG CoreLiquid P13.
-- [Rust](https://rustup.rs) with the MSVC toolchain, and the
-  [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-  ("Desktop development with C++").
-- [Python 3](https://www.python.org) (for the one-time key extraction script).
-- [Zadig](https://zadig.akeo.ie) (to switch interface 0 to WinUSB).
-- Optional: [ffmpeg](https://ffmpeg.org) for video sources and the loop
-  finder, e.g. `winget install Gyan.FFmpeg`.
-
 ## Installation
 
-### 1. Extract the device key (needs MSI's driver once)
+### 1. Prepare the cooler
 
-The handshake needs the display's RSA **public** key, which is embedded in
-MSI's display driver. It is not included in this repository. If MSI Center
-with EZ Display is installed and the pump display works with it, run:
+These steps are needed however you install.
 
-```powershell
-python scripts\extract_device_key.py
-```
+1. **Remove MSI's software.** Uninstall MSI Center / EZ Display, or at least
+   stop its services: they hold the device. Steam (Steam Input) can grab it
+   too; once the service is installed it claims the display at boot, before
+   Steam starts.
+2. **Switch interface 0 to WinUSB** with [Zadig](https://zadig.akeo.ie):
+   1. In **Options**, enable **List All Devices**.
+   2. Select **P13 (Interface 0)**. Do **not** select interface 1 or the
+      composite device.
+   3. Choose **WinUSB** and click **Replace Driver**.
 
-This reads `AicUsbDisplayDriver.dll` from the Windows driver store and writes
-`C:\ProgramData\aio-ui\device_key.pem`. (The script also accepts a path to the
-DLL if you have it elsewhere.)
+   The virtual third monitor disappears.
+3. **Optional, for videos:** install [ffmpeg](https://ffmpeg.org), for example
+   `winget install Gyan.FFmpeg`. Images, GIFs and colors work without it.
 
-### 2. Remove MSI's software
+### 2. Install
 
-Uninstall MSI Center / EZ Display, or at least stop its services. They hold
-the device and conflict with this software. Steam (Steam Input) can also grab
-the device; once the service is installed it claims the display at boot, before
-Steam starts.
+#### With the installer (recommended)
 
-### 3. Switch interface 0 to WinUSB
+Download `aio-display-setup-<version>.exe` from the
+[Releases](../../releases) page and run it. It shows the warnings above and
+the Zadig steps again, then:
 
-1. Run Zadig. In **Options**, enable **List All Devices**.
-2. Select **P13 (Interface 0)**. Do **not** select interface 1 or the
-   composite device.
-3. Choose **WinUSB** as the driver and click **Replace Driver**.
+- copies the programs to `C:\Program Files\aio-ui`,
+- registers and starts the `aio-daemon` service (automatic start, restart on
+  failure),
+- adds **AIO Display** and **AIO Loop Finder** to the Start Menu,
+- optionally shows the tray icon at login,
+- with **Video support** ticked, tells the service where ffmpeg is. If ffmpeg
+  (and ffprobe) cannot be found, setup stops with an error so you can install
+  it first; untick the option to install without video support.
 
-The virtual third monitor disappears.
+To update, run a newer installer over the old one. To uninstall, use
+Settings > Apps.
 
-### 4. Build
+The installer and programs are not code-signed, so Windows SmartScreen will
+warn ("Windows protected your PC" > More info > Run anyway). They are built by
+GitHub Actions from this repository's source
+([release workflow](.github/workflows/release.yml)).
+
+Each release also has a **portable zip** with the same programs and
+`install.ps1` (see below) for people who prefer a script.
+
+#### From source
+
+Requirements: [Rust](https://rustup.rs) with the MSVC toolchain and the
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+("Desktop development with C++").
 
 ```powershell
 cargo build --release
-```
 
-### 5. Test
-
-With Steam and MSI software closed:
-
-```powershell
+# Try it before installing (with Steam and MSI software closed):
 .\target\release\aio-show.exe red          # the pump display turns red
 .\target\release\aio-show.exe --info       # prints device info (HID)
+
+# Install, from an Administrator PowerShell:
+.\scripts\install.ps1 -VideoSupport -Autostart
 ```
 
-### 6. Install the service
+[scripts/install.ps1](scripts/install.ps1) does the same as the installer and
+every step is commented. `-VideoSupport` stops before changing anything if
+ffmpeg is not found; `-Autostart` adds the tray icon at login. Run it again
+after rebuilding to update; `scripts\uninstall.ps1` removes it.
 
-From an **Administrator** PowerShell:
+Settings, the frame cache and logs live in `C:\ProgramData\aio-ui` either
+way.
 
-```powershell
-.\scripts\install.ps1              # add -Autostart for the tray icon at login
-```
+### About the device key
 
-This copies the programs to `C:\Program Files\aio-ui`, registers the
-`aio-daemon` service (automatic start, restart on failure), tells it where
-ffmpeg is, starts it, and adds **AIO Display** and **AIO Loop Finder** to the
-Start Menu. Read [scripts/install.ps1](scripts/install.ps1) first: every step
-is commented. Run it again after rebuilding to update.
-
-Settings, the frame cache and logs live in `C:\ProgramData\aio-ui`.
+The display handshake needs the cooler's RSA **public** key. It comes from
+MSI's display driver (`AicUsbDisplayDriver.dll`) and is built into the
+programs (`crates/aio-proto/keys/p13_public_key.pem`): the driver carries this
+one key for all P13s, and the private half stays inside the cooler. Nothing
+has to be extracted. Should MSI ever ship a different key, run
+`python scripts\extract_device_key.py` while their driver is installed; it
+writes `C:\ProgramData\aio-ui\device_key.pem`, which overrides the built-in
+key. See [docs/handshake.md](docs/handshake.md).
 
 ## Usage
 
@@ -182,8 +192,10 @@ Images, GIFs and videos are center-cropped to a square and scaled to 480×480.
 
 ## Uninstalling / going back to MSI
 
-1. From an Administrator PowerShell: `.\scripts\uninstall.ps1` (removes the
-   service, programs and shortcuts; keeps `C:\ProgramData\aio-ui`).
+1. Uninstall **AIO Display for MSI P13** in Settings > Apps (if you used
+   `install.ps1`: run `.\scripts\uninstall.ps1` as Administrator). This
+   removes the service, programs and shortcuts and keeps
+   `C:\ProgramData\aio-ui`.
 2. In Device Manager, uninstall **P13 (Interface 0)** and tick
    **"Attempt to remove the driver for this device"** (or remove the Zadig
    driver with `pnputil /delete-driver oemNN.inf /uninstall`).
@@ -192,11 +204,13 @@ Images, GIFs and videos are center-cropped to a square and scaled to 480×480.
 ## Troubleshooting
 
 - **"device is in use by another program"**: MSI's services may have it
-  open. Quit them. If that doens't work try a reboot.
+  open. Quit them. If that doesn't work try a reboot.
 - **insufficient permissions**: It's not needed to run any software here as admin, except for the install script. Usually this just means you need to reboot and try again.
 - **Logs**: `C:\ProgramData\aio-ui\logs` (service) or the console output of
   `aio-daemon.exe` run in the foreground.
-- **Videos don't import**: install ffmpeg and re-run `install.ps1`.
+- **Videos don't import** ("video support is not set up"): install ffmpeg,
+  then run the installer again with **Video support** ticked (from source:
+  `install.ps1 -VideoSupport`).
 - **Display stuck or blank**: a full power-off of the PC (not a restart)
   resets the display controller.
 
@@ -207,7 +221,7 @@ cargo test --workspace
 ```
 
 Almost everything is tested without hardware against the simulated device.
-Tests that need ffmpeg or the extracted key skip themselves when those are
+Tests that need ffmpeg or local USB captures skip themselves when those are
 missing. `crates/aio-proto/src/mock_device_key.pem` is a **throwaway key
 generated for the tests**; it has nothing to do with the real device.
 

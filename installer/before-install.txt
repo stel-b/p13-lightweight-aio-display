@@ -1,0 +1,36 @@
+AIO Display for the MSI MPG CoreLiquid P13
+==========================================
+
+A lightweight replacement for MSI Center / EZ Display that drives the pump
+LCD directly over USB, without adding a virtual monitor to Windows.
+
+PLEASE READ BEFORE INSTALLING
+
+- This software was written mostly by an AI (Anthropic's Claude), guided and
+  tested by a human. It was reverse engineered; it is not an official or
+  supported MSI tool, and it is not affiliated with MSI or ArtInChip.
+
+- Use it at your own risk. It installs a Windows service that runs as
+  LocalSystem and talks to the cooler's display controller with commands that
+  were worked out by observation. It has been tested on one P13 (firmware
+  P13_20251204v01). Other coolers or firmware versions may behave differently.
+
+- Only continue if you understand what it does and know how to undo it.
+
+WHAT THIS INSTALLER DOES
+
+1. Copies the programs to C:\Program Files\aio-ui.
+2. Registers and starts the "aio-daemon" service (automatic start,
+   restart on failure).
+3. Adds "AIO Display" and "AIO Loop Finder" to the Start Menu.
+4. Optional "Video support": tells the service where ffmpeg is. Install
+   ffmpeg first (winget install Gyan.FFmpeg); setup stops with an error if
+   the option is ticked and ffmpeg cannot be found.
+
+WHAT YOU HAVE TO DO YOURSELF
+
+- Uninstall MSI Center / EZ Display (it holds the device).
+- Switch "P13 (Interface 0)" to the WinUSB driver with Zadig. The next pages
+  explain how. Until then the service runs but cannot reach the display.
+
+Settings, the frame cache and logs are kept in C:\ProgramData\aio-ui.

@@ -5,7 +5,9 @@
 .DESCRIPTION
     Stops and deletes the service, closes aio-ui, removes its shortcuts and
     "$env:ProgramFiles\aio-ui".
-    Keeps "$env:ProgramData\aio-ui" (settings, handshake.bin, cache, logs);
+    For installs made with install.ps1; installer installs are removed from
+    Settings > Apps instead.
+    Keeps "$env:ProgramData\aio-ui" (settings, cache, logs);
     delete that folder yourself if you want everything gone.
 
     Run from an Administrator PowerShell.
@@ -33,6 +35,7 @@ Get-Process -Name aio-ui, aio-loop -ErrorAction SilentlyContinue | Stop-Process 
 foreach ($link in @(
         (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\AIO Display.lnk"),
         (Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\AIO Loop Finder.lnk"),
+        (Join-Path ([Environment]::GetFolderPath("CommonStartup")) "AIO Display.lnk"),
         (Join-Path ([Environment]::GetFolderPath("Startup")) "AIO Display.lnk"))) {
     if (Test-Path $link) {
         Remove-Item -Force $link

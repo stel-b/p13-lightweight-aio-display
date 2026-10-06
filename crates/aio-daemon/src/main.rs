@@ -4,7 +4,7 @@
 //!   aio-daemon              run in the foreground (Ctrl+C to stop)
 //!   aio-daemon --service    run under the service manager
 //!
-//! Install the service with `scripts/install.ps1`.
+//! The service is installed by the installer (or `scripts/install.ps1`).
 
 use aio_daemon::{app, paths, service};
 use anyhow::Result;
@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 const USAGE: &str = "usage: aio-daemon [--service]
   (no argument)  run in the foreground until Ctrl+C
   --service      run as a Windows service (used by the service manager;
-                 install with scripts\\install.ps1)";
+                 installed by the AIO Display installer)";
 
 fn filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())

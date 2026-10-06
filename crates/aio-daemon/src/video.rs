@@ -17,9 +17,10 @@ use tracing::{debug, info};
 
 use crate::render;
 
-/// Environment variable with the full path of ffmpeg.exe. The service sets it
-/// (see `scripts/install.ps1`), because a per-user ffmpeg install is not on
-/// LocalSystem's PATH. ffprobe.exe is expected next to it.
+/// Environment variable with the full path of ffmpeg.exe. The installer (or
+/// `scripts/install.ps1 -VideoSupport`) sets it for the service, because a
+/// per-user ffmpeg install is not on LocalSystem's PATH. ffprobe.exe is
+/// expected next to it.
 pub const FFMPEG_ENV: &str = "AIO_FFMPEG";
 /// Highest frame rate we import: the panel refreshes at 60 Hz.
 const MAX_FPS: u32 = 60;
@@ -43,11 +44,15 @@ pub fn find_tools() -> Result<Tools> {
     let ffmpeg = match std::env::var_os(FFMPEG_ENV) {
         Some(p) => {
             let p = PathBuf::from(p);
-            anyhow::ensure!(p.is_file(), "{FFMPEG_ENV} points to {}, which does not exist", p.display());
+            anyhow::ensure!(
+                p.is_file(),
+                "ffmpeg is no longer at {}: reinstall it, or run the AIO Display installer again with \"Video support\" ticked",
+                p.display()
+            );
             p
         }
         None => on_path("ffmpeg.exe").context(
-            "ffmpeg not found: install it (winget install Gyan.FFmpeg) and re-run scripts\\install.ps1",
+            "video support is not set up: install ffmpeg (winget install Gyan.FFmpeg), then run the AIO Display installer again with \"Video support\" ticked",
         )?,
     };
     let sibling = ffmpeg.with_file_name("ffprobe.exe");

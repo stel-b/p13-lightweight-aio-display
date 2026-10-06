@@ -1,6 +1,9 @@
 <#
 .SYNOPSIS
-    Installs or updates the aio-daemon Windows service and the aio-ui app.
+    Installs or updates AIO Display from a source build or the portable zip.
+
+    Most people should use the installer (aio-display-setup-<version>.exe from
+    the GitHub Releases page) instead; it does the same with a wizard.
 
 .DESCRIPTION
     Does exactly this, and nothing else:
@@ -10,8 +13,9 @@
          "$env:ProgramFiles\aio-ui".
       3. Registers the service on first install: automatic start at boot,
          runs as LocalSystem, command line "<exe>" --service.
-      4. Sets the service's AIO_FFMPEG environment variable to your ffmpeg,
-         if found (only used to import videos).
+      4. With -VideoSupport: sets the service's AIO_FFMPEG environment
+         variable to your ffmpeg (needed to import videos). Without it the
+         variable is removed and video sources are refused.
       5. Sets recovery: restart after 5 s on failure (also on error exits).
       6. Starts the service.
       7. Adds Start Menu shortcuts "AIO Display" (settings window) and
@@ -19,17 +23,22 @@
          and with -Autostart a Startup-folder shortcut for the tray icon
          (aio-ui --tray, about 2 MB; it opens the window on demand).
 
-    Settings, cache and logs live in "$env:ProgramData\aio-ui". The service
-    needs device_key.pem there (scripts\extract_device_key.py), or the older
-    replay file handshake.bin (scripts\extract_handshake.py).
+    Settings, cache and logs live in "$env:ProgramData\aio-ui". The device
+    key is built in; a device_key.pem there overrides it.
 
     Run from an Administrator PowerShell. Re-run after rebuilding to update.
 
 .PARAMETER BinDir
-    Folder with the built binaries. Default: target\release in this repo.
+    Folder with the binaries. Default: this script's folder if they are there
+    (portable zip), else target\release in this repo.
+
+.PARAMETER VideoSupport
+    Enable video sources. ffmpeg and ffprobe must be installed (for example
+    winget install Gyan.FFmpeg); the script stops before changing anything if
+    they are not found.
 
 .PARAMETER FfmpegPath
-    Full path of ffmpeg.exe. Default: the ffmpeg on your PATH, if any.
+    With -VideoSupport: full path of ffmpeg.exe. Default: the one on your PATH.
 
 .PARAMETER Autostart
     Also show the tray icon (aio-ui --tray) when you log in.
@@ -38,7 +47,8 @@
 # No positional arguments: a typo like "--Autostart" must be an error, not a BinDir.
 [CmdletBinding(PositionalBinding = $false)]
 param(
-    [string]$BinDir = (Join-Path $PSScriptRoot "..\target\release"),
+    [string]$BinDir,
+    [switch]$VideoSupport,
     [string]$FfmpegPath,
     [switch]$Autostart
 )
@@ -51,13 +61,28 @@ $InstallDir  = Join-Path $env:ProgramFiles "aio-ui"
 $DataDir     = Join-Path $env:ProgramData "aio-ui"
 $Binaries    = "aio-daemon.exe", "aio-cli.exe", "aio-ui.exe", "aio-loop.exe", "aio-loop-cli.exe"
 
+if (-not $BinDir) {
+    $BinDir = if (Test-Path (Join-Path $PSScriptRoot "aio-daemon.exe")) { $PSScriptRoot }
+              else { Join-Path $PSScriptRoot "..\target\release" }
+}
 foreach ($name in $Binaries) {
     if (-not (Test-Path (Join-Path $BinDir $name))) {
         throw "$name not found in $BinDir. Build first: cargo build --release"
     }
 }
-if (-not (Test-Path (Join-Path $DataDir "device_key.pem")) -and -not (Test-Path (Join-Path $DataDir "handshake.bin"))) {
-    Write-Warning "Neither device_key.pem nor handshake.bin is in $DataDir; the service will start but cannot connect. Run scripts\extract_device_key.py."
+
+# Video support: find ffmpeg (and ffprobe next to it or on PATH) before
+# touching anything, so a missing ffmpeg never leaves a half-done install.
+if ($VideoSupport) {
+    if (-not $FfmpegPath) {
+        $cmd = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $FfmpegPath = $cmd.Source }
+    }
+    $probeOk = $FfmpegPath -and ((Test-Path (Join-Path (Split-Path $FfmpegPath) "ffprobe.exe")) -or
+                                 (Get-Command ffprobe.exe -ErrorAction SilentlyContinue))
+    if (-not $FfmpegPath -or -not (Test-Path $FfmpegPath) -or -not $probeOk) {
+        throw "Video support needs ffmpeg and ffprobe, but they were not found. Install ffmpeg (winget install Gyan.FFmpeg), open a new terminal and run this script again, or leave out -VideoSupport."
+    }
 }
 
 # 1. Stop the existing service so its exe can be replaced.
@@ -95,21 +120,17 @@ if (-not $existing) {
     Write-Host "Registered service $ServiceName (LocalSystem, automatic start)"
 }
 
-# 4. Tell the service where ffmpeg is (needed only to import videos). A
-#     per-user install (winget) is not on LocalSystem's PATH, so the path is
-#     passed in the service's own environment (registry value "Environment").
-if (-not $FfmpegPath) {
-    $cmd = Get-Command ffmpeg.exe -ErrorAction SilentlyContinue
-    if ($cmd) { $FfmpegPath = $cmd.Source }
-}
+# 4. Video support: tell the service where ffmpeg is. A per-user install
+#     (winget) is not on LocalSystem's PATH, so the path is passed in the
+#     service's own environment (registry value "Environment").
 $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
-if ($FfmpegPath) {
+if ($VideoSupport) {
     New-ItemProperty -Path $serviceKey -Name Environment -PropertyType MultiString `
         -Value @("AIO_FFMPEG=$FfmpegPath") -Force | Out-Null
-    Write-Host "Video import will use $FfmpegPath"
+    Write-Host "Video support: using $FfmpegPath"
 } else {
     Remove-ItemProperty -Path $serviceKey -Name Environment -ErrorAction SilentlyContinue
-    Write-Warning "ffmpeg not found; video sources won't import. Install it (winget install Gyan.FFmpeg) and re-run this script."
+    Write-Host "Video support off (use -VideoSupport to enable it)"
 }
 
 # 5. Recovery: restart after 5 s, reset the failure count after a day.
@@ -134,7 +155,7 @@ New-Shortcut (Join-Path $startMenu "AIO Display.lnk") ""
 New-Shortcut (Join-Path $startMenu "AIO Loop Finder.lnk") "" "aio-loop.exe" "Find a seamless loop in a video"
 Write-Host "Start Menu: AIO Display, AIO Loop Finder"
 if ($Autostart) {
-    New-Shortcut (Join-Path ([Environment]::GetFolderPath("Startup")) "AIO Display.lnk") "--tray"
+    New-Shortcut (Join-Path ([Environment]::GetFolderPath("CommonStartup")) "AIO Display.lnk") "--tray"
     Write-Host "The tray icon will start at login"
 }
 

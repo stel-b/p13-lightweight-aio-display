@@ -30,7 +30,8 @@ fn on_path(exe: &str) -> Option<PathBuf> {
 pub fn find_tools() -> Result<Tools> {
     let ffmpeg = match std::env::var_os("AIO_FFMPEG") {
         Some(p) => PathBuf::from(p),
-        None => on_path("ffmpeg.exe").context("ffmpeg not found: install it with `winget install Gyan.FFmpeg`")?,
+        None => on_path("ffmpeg.exe")
+            .context("ffmpeg not found: install it (winget install Gyan.FFmpeg), then start the Loop Finder again")?,
     };
     let sibling = ffmpeg.with_file_name("ffprobe.exe");
     let ffprobe = if sibling.is_file() { sibling } else { on_path("ffprobe.exe").context("ffprobe not found")? };

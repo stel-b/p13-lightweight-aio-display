@@ -24,8 +24,8 @@ pub fn cache_dir() -> PathBuf {
     data_dir().join("cache")
 }
 
-/// The device's RSA public key, extracted from MSI's driver by
-/// `scripts/extract_device_key.py`. With it the handshake is computed.
+/// Optional override of the built-in device key (e.g. if MSI ever ships a
+/// new key), extracted from MSI's driver by `scripts/extract_device_key.py`.
 pub fn device_key_file() -> PathBuf {
     data_dir().join("device_key.pem")
 }
@@ -45,16 +45,17 @@ pub fn load_device_key(path: &Path) -> Result<DeviceKey> {
     DeviceKey::from_pem(&pem).with_context(|| format!("invalid {}", path.display()))
 }
 
-/// The computed handshake if `key` exists, else the replay of `handshake`.
-/// `prefer_replay` picks the replay when both exist (fallback after a failure).
+/// The computed handshake, with the key from `key` if that file exists, else
+/// the built-in P13 key. `prefer_replay` switches to replaying `handshake`
+/// instead, if that file exists (fallback after a failed handshake).
 pub fn load_auth(key: &Path, handshake: &Path, prefer_replay: bool) -> Result<Auth> {
-    if key.is_file() && !(prefer_replay && handshake.is_file()) {
-        load_device_key(key).map(Auth::Computed)
-    } else {
-        load_handshake(handshake)
-            .map(Auth::Replay)
-            .with_context(|| format!("no device key at {}", key.display()))
+    if prefer_replay && handshake.is_file() {
+        return load_handshake(handshake).map(Auth::Replay);
     }
+    if key.is_file() {
+        return load_device_key(key).map(Auth::Computed);
+    }
+    Ok(Auth::Computed(DeviceKey::p13()))
 }
 
 pub fn load_handshake(path: &Path) -> Result<HandshakeData> {
@@ -97,31 +98,33 @@ mod tests {
     }
 
     #[test]
-    fn uses_whatever_exists() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (k, h) = files(tmp.path(), true, false);
-        assert!(matches!(load_auth(&k, &h, true).unwrap(), Auth::Computed(_)));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let (k, h) = files(tmp.path(), false, true);
-        assert!(matches!(load_auth(&k, &h, false).unwrap(), Auth::Replay(_)));
-
+    fn falls_back_to_the_built_in_key() {
         let tmp = tempfile::tempdir().unwrap();
         let (k, h) = files(tmp.path(), false, false);
-        let err = load_auth(&k, &h, false).unwrap_err();
-        assert!(format!("{err:#}").contains("no device key"), "{err:#}");
+        assert!(matches!(load_auth(&k, &h, false).unwrap(), Auth::Computed(key) if key == DeviceKey::p13()));
+
+        // A key file overrides the built-in key.
+        let (k, h) = files(tmp.path(), true, false);
+        assert!(matches!(load_auth(&k, &h, false).unwrap(), Auth::Computed(key) if key != DeviceKey::p13()));
+
+        // Replay only when asked to and available.
+        let tmp = tempfile::tempdir().unwrap();
+        let (k, h) = files(tmp.path(), false, false);
+        assert!(matches!(load_auth(&k, &h, true).unwrap(), Auth::Computed(_)));
+        let (k, h) = files(tmp.path(), false, true);
+        assert!(matches!(load_auth(&k, &h, true).unwrap(), Auth::Replay(_)));
     }
 
-    /// Checks the computed handshake against the captured session, if the
-    /// extracted files are present on this machine (they are never committed).
+    /// Checks the built-in key against a captured session, if the capture
+    /// files are present on this machine (they are never committed).
     #[test]
-    fn device_key_recovers_captured_final_block() {
-        let (key, hs, exp) = (device_key_file(), handshake_file(), expected_responses_file());
-        if !(key.is_file() && hs.is_file() && exp.is_file()) {
-            eprintln!("extracted handshake files not present; skipping");
+    fn built_in_key_recovers_captured_final_block() {
+        let (hs, exp) = (handshake_file(), expected_responses_file());
+        if !(hs.is_file() && exp.is_file()) {
+            eprintln!("capture files not present; skipping");
             return;
         }
-        let key = load_device_key(&key).unwrap();
+        let key = DeviceKey::p13();
         let replay = load_handshake(&hs).unwrap();
         let captured = load_expected_responses(&exp).unwrap().unwrap();
         assert_eq!(key.recover(&captured.auth2).as_deref(), Some(&replay.final60[..]));

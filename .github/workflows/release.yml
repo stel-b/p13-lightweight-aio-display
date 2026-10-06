@@ -1,0 +1,59 @@
+# Push a tag like v0.1.0 to build the installer and a portable zip and attach
+# them to a GitHub Release. The binaries are built here, from the public
+# source, not on anyone's PC.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Build
+        run: cargo build --release --workspace
+
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc installer\aio-display.iss "/DAppVersion=${{ steps.version.outputs.version }}"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          $name = "aio-display-${{ steps.version.outputs.version }}-portable"
+          $dir = "target\$name"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          foreach ($exe in "aio-daemon", "aio-cli", "aio-ui", "aio-loop", "aio-loop-cli", "aio-show") {
+            Copy-Item "target\release\$exe.exe" $dir
+          }
+          Copy-Item README.md, LICENSE, scripts\install.ps1, scripts\uninstall.ps1 $dir
+          Compress-Archive -Path "$dir\*" -DestinationPath "target\$name.zip" -Force
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            target/installer/aio-display-setup-${{ steps.version.outputs.version }}.exe
+            target/aio-display-${{ steps.version.outputs.version }}-portable.zip

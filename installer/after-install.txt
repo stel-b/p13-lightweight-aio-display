@@ -1,0 +1,30 @@
+ONE MORE STEP: SWITCH THE DISPLAY TO WINUSB
+===========================================
+
+Skip this if you already did it.
+
+The pump display (USB interface 0) has to use Windows' generic WinUSB driver
+instead of MSI's display driver:
+
+1. Uninstall MSI Center / EZ Display if it is still installed, and quit
+   Steam (it can hold the device).
+2. Download Zadig from https://zadig.akeo.ie and run it.
+3. Options menu: enable "List All Devices".
+4. Select "P13 (Interface 0)".
+   Do NOT select "P13 (Interface 1)" or the composite device.
+5. Choose "WinUSB" and click "Replace Driver".
+
+The virtual third monitor disappears and, within a few seconds, the service
+connects. Open "AIO Display" from the Start Menu to choose what to show.
+
+Videos: if you installed without "Video support", install ffmpeg
+(winget install Gyan.FFmpeg), then run this installer again and tick it.
+The Loop Finder only needs ffmpeg on your PATH.
+
+TO GO BACK TO MSI
+
+Uninstall "AIO Display" in Settings > Apps, uninstall "P13 (Interface 0)" in
+Device Manager with "Attempt to remove the driver for this device" ticked,
+and reinstall MSI Center.
+
+Logs: C:\ProgramData\aio-ui\logs

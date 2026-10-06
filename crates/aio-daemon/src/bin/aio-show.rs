@@ -22,10 +22,10 @@ const USAGE: &str = r"usage: aio-show [options] <color | file>
        aio-show --brightness N    set the backlight 0-100 (HID only)
   color:            a name (red, teal, ...) or #rrggbb
   file:             an image, GIF or video (animations loop until Ctrl+C)
-  --key FILE        device public key; the handshake is computed (default
+  --key FILE        device public key overriding the built-in one (default
                     %ProgramData%\aio-ui\device_key.pem, used if present)
   --handshake FILE  replay data (default %ProgramData%\aio-ui\handshake.bin)
-  --replay          replay handshake.bin even if a key is present
+  --replay          replay a captured handshake.bin instead (developer use)
   --responses FILE  captured device answers to compare (replay only)
   --cache DIR       frame cache directory
   --dry-run         import into the cache only, don't open the device";

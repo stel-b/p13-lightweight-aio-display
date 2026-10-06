@@ -97,9 +97,10 @@ pub trait Connector: Send + 'static {
 }
 
 pub struct UsbConnector {
-    /// `device_key.pem`: preferred, the handshake is computed from it.
+    /// `device_key.pem`: overrides the built-in device key if present.
     pub key_path: PathBuf,
-    /// `handshake.bin`: replayed if there is no key, or the key failed.
+    /// `handshake.bin`: a captured session, replayed only after the computed
+    /// handshake failed (developer fallback; normally absent).
     pub handshake_path: PathBuf,
     pub notify: Option<NotifyTarget>,
     /// Set after the computed handshake failed and a replay file exists.

@@ -31,11 +31,21 @@ pub enum KeyError {
     Size(usize),
 }
 
+/// The P13's public key, as embedded in MSI's display driver
+/// (`AicUsbDisplayDriver.dll`). Every P13 answers to it: the driver carries
+/// this single key and the private half lives in the cooler.
+pub const P13_PUBLIC_KEY_PEM: &str = include_str!("../keys/p13_public_key.pem");
+
 /// The device's RSA public key (PEM `PUBLIC KEY`, embedded in MSI's driver).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceKey(RsaPublicKey);
 
 impl DeviceKey {
+    /// The built-in P13 key ([`P13_PUBLIC_KEY_PEM`]).
+    pub fn p13() -> Self {
+        Self::from_pem(P13_PUBLIC_KEY_PEM).expect("built-in key is a valid RSA-2048 public key")
+    }
+
     pub fn from_pem(pem: &str) -> Result<Self, KeyError> {
         let key = RsaPublicKey::from_public_key_pem(pem).map_err(|e| KeyError::Pem(e.to_string()))?;
         Self::new(key)
@@ -243,6 +253,11 @@ mod tests {
         short_padding[2..6].fill(0xFF); // only 4 FF before the separator
         short_padding[7..].fill(b'x');
         assert_eq!(unpad_signature(&short_padding), None);
+    }
+
+    #[test]
+    fn built_in_key_is_valid() {
+        assert_eq!(DeviceKey::p13().0.size(), RSA_BLOCK_LEN);
     }
 
     #[test]

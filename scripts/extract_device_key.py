@@ -1,11 +1,12 @@
-# Extracts the P13's RSA public key from MSI's display driver, so the daemon
-# can compute the handshake (see docs/handshake.md). Run once.
+# Extracts the P13's RSA public key from MSI's display driver (see
+# docs/handshake.md). Normally not needed: the current key is built in. Use it
+# if MSI ever ships a different key; the output overrides the built-in one.
 #
 #   python scripts/extract_device_key.py [AicUsbDisplayDriver.dll] [out_dir]
 #
 # Default driver: the installed one in the Windows driver store, else the copy
 # in research/msi/bin/driver. Default output: %ProgramData%\aio-ui.
-# The key is not secret, but it comes from MSI's driver: don't commit it.
+# The output file is git-ignored; the built-in copy is crates/aio-proto/keys/.
 import base64, glob, os, re, sys
 from pathlib import Path
 

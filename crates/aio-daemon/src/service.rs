@@ -1,5 +1,6 @@
 //! Windows service entry point. Installing and removing the service is done
-//! by `scripts/install.ps1` and `scripts/uninstall.ps1`, not by this binary.
+//! by the installer (`installer/aio-display.iss`) or `scripts/install.ps1`,
+//! not by this binary.
 //!
 //! The service runs as LocalSystem and starts automatically at boot, before
 //! anyone logs in, so it holds the display before Steam or other software
@@ -17,7 +18,7 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult, ServiceStatusHandle};
 use windows_service::{define_windows_service, service_dispatcher};
 
-/// Must match the name `scripts/install.ps1` registers.
+/// Must match the name the installer and `scripts/install.ps1` register.
 pub const SERVICE_NAME: &str = "aio-daemon";
 /// Argument the SCM passes so the exe knows it runs as a service.
 pub const SERVICE_ARG: &str = "--service";

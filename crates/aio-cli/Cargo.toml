@@ -1,0 +1,8 @@
+[package]
+name = "aio-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aio-ipc = { version = "0.1.0", path = "../aio-ipc" }
+anyhow = "1.0.104"

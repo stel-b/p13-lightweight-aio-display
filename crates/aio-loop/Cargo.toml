@@ -1,0 +1,23 @@
+[package]
+name = "aio-loop"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "aio-loop"
+path = "src/main.rs"
+
+[[bin]]
+name = "aio-loop-cli"
+path = "src/bin/aio-loop-cli.rs"
+
+[dependencies]
+aio-ipc = { version = "0.1.0", path = "../aio-ipc" }
+anyhow = "1.0.104"
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow"] }
+egui = "0.36.2"
+rfd = "0.17.2"
+serde_json = "1.0.151"
+
+[dev-dependencies]
+tempfile = "3.27.0"

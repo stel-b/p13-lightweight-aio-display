@@ -1,0 +1,9 @@
+/target/
+
+# Handshake data from MSI's driver and USB captures: never commit.
+handshake.bin
+device_key.pem
+expected_responses.bin
+*.pcap
+*.pcapng
+/research/

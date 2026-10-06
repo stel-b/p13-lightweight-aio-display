@@ -1,0 +1,29 @@
+[package]
+name = "aio-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "aio-show"
+path = "src/bin/aio-show.rs"
+
+[dependencies]
+aio-ipc = { version = "0.1.0", path = "../aio-ipc" }
+aio-proto = { version = "0.1.0", path = "../aio-proto" }
+anyhow = "1.0.104"
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+jpeg-encoder = "0.7.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.18"
+tokio = { version = "1.53.2", features = ["rt", "macros", "net", "io-util", "sync", "signal", "time"] }
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+windows-service = "0.8.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Devices_DeviceAndDriverInstallation", "Win32_Devices_HumanInterfaceDevice", "Win32_Devices_Usb", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_LibraryLoader", "Win32_System_Power", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+aio-proto = { path = "../aio-proto", features = ["mock"] }
+tempfile = "3.27.0"

@@ -1,0 +1,14 @@
+[package]
+name = "aio-proto"
+version = "0.1.0"
+edition = "2024"
+description = "USB protocol for the LCD on the MSI MPG CoreLiquid P13 AIO cooler"
+
+[features]
+# Exposes `aio_proto::mock`, a simulated device for tests in other crates.
+mock = []
+
+[dependencies]
+rand_core = { version = "0.6", features = ["getrandom"] }
+rsa = "0.9.10"
+thiserror = "2.0.18"

@@ -28,6 +28,64 @@ pub enum Source {
     Video { path: PathBuf },
 }
 
+/// File extensions treated as video (everything else that isn't a GIF is an image).
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv"];
+/// File extensions treated as still images.
+pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp"];
+
+impl Source {
+    /// The source for a media file, chosen by its extension.
+    pub fn for_file(path: PathBuf) -> Source {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        if ext == "gif" {
+            Source::Gif { path }
+        } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+            Source::Video { path }
+        } else {
+            Source::Image { path }
+        }
+    }
+
+    /// The file behind this source, if any.
+    pub fn path(&self) -> Option<&std::path::Path> {
+        match self {
+            Source::Color { .. } => None,
+            Source::Image { path } | Source::Gif { path } | Source::Video { path } => Some(path),
+        }
+    }
+
+    /// Short human description, e.g. `GIF: cat.gif` or `Color #2ec4b6`.
+    pub fn label(&self) -> String {
+        let name = |p: &PathBuf| p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
+        match self {
+            Source::Color { rgb: [r, g, b] } => format!("Color #{r:02x}{g:02x}{b:02x}"),
+            Source::Image { path } => format!("Image: {}", name(path)),
+            Source::Gif { path } => format!("GIF: {}", name(path)),
+            Source::Video { path } => format!("Video: {}", name(path)),
+        }
+    }
+}
+
+/// What is shown when the daemon starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayMode {
+    /// The selected source (the last one shown).
+    #[default]
+    Selected,
+    /// A random library item at every start (normally: every boot).
+    Random,
+}
+
+/// One entry of the media library.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryItem {
+    pub id: u64,
+    pub source: Source,
+    /// False when neither its cached frames nor its file exist any more.
+    pub available: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Request {
@@ -43,6 +101,13 @@ pub enum Request {
     SetBrightness { value: u8 },
     /// Screen rotation in degrees: 0, 90, 180 or 270.
     SetRotation { degrees: u16 },
+    /// Imports a file into the library (without showing it).
+    LibraryAdd { source: Source },
+    /// Removes an item from the library (the file itself is not touched).
+    LibraryRemove { id: u64 },
+    /// Shows a library item.
+    LibraryShow { id: u64 },
+    SetPlayMode { mode: PlayMode },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +150,13 @@ pub struct Status {
     /// Device firmware version, when HID control works.
     #[serde(default)]
     pub firmware: Option<String>,
+    #[serde(default)]
+    pub library: Vec<LibraryItem>,
+    #[serde(default)]
+    pub play_mode: PlayMode,
+    /// The library item on the display, if the current source is one.
+    #[serde(default)]
+    pub current_item: Option<u64>,
 }
 
 fn full_brightness() -> u8 {
@@ -181,6 +253,9 @@ mod tests {
                 brightness: 40,
                 rotation: Some(180),
                 firmware: Some("P13_20251204v01".into()),
+                library: vec![LibraryItem { id: 3, source: Source::Gif { path: "C:\\a.gif".into() }, available: true }],
+                play_mode: PlayMode::Random,
+                current_item: Some(3),
             }),
         ];
         for r in responses {
@@ -193,6 +268,38 @@ mod tests {
     fn preview_is_base64() {
         let line = encode_line(&Response::Preview { jpeg: vec![0xFF, 0xD8] });
         assert_eq!(std::str::from_utf8(&line).unwrap(), "{\"type\":\"preview\",\"jpeg\":\"/9g=\"}\n");
+    }
+
+    #[test]
+    fn library_requests_roundtrip() {
+        for req in [
+            Request::LibraryAdd { source: Source::Video { path: r"C:\v.mp4".into() } },
+            Request::LibraryRemove { id: 7 },
+            Request::LibraryShow { id: 7 },
+            Request::SetPlayMode { mode: PlayMode::Random },
+        ] {
+            let line = encode_line(&req);
+            assert_eq!(decode_line::<Request>(std::str::from_utf8(&line).unwrap()).unwrap(), req);
+        }
+        assert_eq!(decode_line::<Request>("{\"type\":\"set_play_mode\",\"mode\":\"random\"}").unwrap(),
+            Request::SetPlayMode { mode: PlayMode::Random });
+    }
+
+    #[test]
+    fn older_status_without_library_still_parses() {
+        let old = r#"{"device":"connected","source":null,"paused":false,"fps":0.0,"frames_sent":0,"last_error":null}"#;
+        let s: Status = serde_json::from_str(old).unwrap();
+        assert!(s.library.is_empty());
+        assert_eq!(s.play_mode, PlayMode::Selected);
+    }
+
+    #[test]
+    fn source_from_file_extension() {
+        assert!(matches!(Source::for_file("a.GIF".into()), Source::Gif { .. }));
+        assert!(matches!(Source::for_file("a.mkv".into()), Source::Video { .. }));
+        assert!(matches!(Source::for_file("a.png".into()), Source::Image { .. }));
+        assert_eq!(Source::for_file(r"C:\x\cat.gif".into()).label(), "GIF: cat.gif");
+        assert_eq!(Source::Color { rgb: [0, 128, 255] }.label(), "Color #0080ff");
     }
 
     #[test]

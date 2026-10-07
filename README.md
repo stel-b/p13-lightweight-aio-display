@@ -64,8 +64,8 @@ The repository is a Rust workspace. Programs end up in
 | `aio-proto` | (library) | The USB protocol, with no USB dependency: the display handshake (computed RSA challenge-response), JPEG frame packaging, and the HID control channel (brightness, rotation, device info). Includes a simulated device used by the tests. |
 | `aio-daemon` | `aio-daemon.exe`, `aio-show.exe` | The background service. It owns the USB connection, reconnects automatically, plays the configured source from a cache of pre-encoded frames (so playback costs almost no CPU), handles device removal, sleep and shutdown (fade to black, backlight off), and serves the other programs over a named pipe. `aio-show` is a one-shot test tool. |
 | `aio-ipc` | (library) | The messages between the daemon and its clients. |
-| `aio-cli` | `aio-cli.exe` | Command-line control: set a source, pause/resume, brightness, rotation, status, save a preview. |
-| `aio-ui` | `aio-ui.exe` | The settings window (status, live preview, source picker, brightness, rotation). `aio-ui --tray` is a tiny tray icon (~2 MB) that opens the window on demand. |
+| `aio-cli` | `aio-cli.exe` | Command-line control: set a source, manage the library, pause/resume, brightness, rotation, status, save a preview. |
+| `aio-ui` | `aio-ui.exe` | The settings window (status, live preview, source picker, library, brightness, rotation). `aio-ui --tray` is a tiny tray icon (~2 MB) that opens the window on demand. |
 | `aio-loop` | `aio-loop.exe`, `aio-loop-cli.exe` | **Loop finder**, a standalone tool: open a video, mark roughly where a loop should start and end, and it finds frames that join seamlessly and saves `<name>_loop.mp4`. |
 
 Documentation of the reverse-engineered protocol and the loop finder:
@@ -174,6 +174,10 @@ key. See [docs/handshake.md](docs/handshake.md).
 
 - **AIO Display** (Start Menu): status, live preview, choose a color, image,
   GIF or video, pause/resume, brightness, rotation.
+- **Library**: add GIFs, videos and images once (they are imported then, so
+  switching later is instant) and pick between them. With **At startup show:
+  Random item**, the daemon picks a different random item each time it starts,
+  so each boot shows something new. Removing an item never deletes your file.
 - **AIO Loop Finder** (Start Menu): make a seamless loop from a video, then
   show it on the pump directly.
 - Command line:
@@ -185,6 +189,11 @@ key. See [docs/handshake.md](docs/handshake.md).
   aio-cli brightness 60
   aio-cli rotate 180
   aio-cli pause | resume | status
+  aio-cli library add C:\path\a.gif C:\path\b.mp4
+  aio-cli library                # list; * marks the item on the display
+  aio-cli library show 2
+  aio-cli library remove 2
+  aio-cli mode random            # or: mode selected
   aio-loop-cli auto C:\path\clip.mp4 0:03 2:10
   ```
 

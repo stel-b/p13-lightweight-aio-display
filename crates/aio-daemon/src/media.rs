@@ -239,6 +239,11 @@ pub fn import(source: &Source, cache_root: &Path) -> Result<CachedMedia> {
     Ok(media)
 }
 
+/// True if `key` has a complete-looking cache entry (cheap: no file is read).
+pub fn is_cached(cache_root: &Path, key: &str) -> bool {
+    cache_root.join(key).join(INDEX_FILE).is_file()
+}
+
 /// Opens an existing cache entry by key without reading the source again.
 pub fn open_cached(cache_root: &Path, key: &str) -> io::Result<CachedMedia> {
     if key.len() != 16 || !key.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -247,12 +252,13 @@ pub fn open_cached(cache_root: &Path, key: &str) -> io::Result<CachedMedia> {
     CachedMedia::open(&cache_root.join(key))
 }
 
-/// Deletes every cache entry except `keep`. Best effort: an entry still open
-/// elsewhere may survive until the next prune.
-pub fn prune(cache_root: &Path, keep: &str) {
+/// Deletes every cache entry except those in `keep`. Best effort: an entry
+/// still open elsewhere may survive until the next prune.
+pub fn prune(cache_root: &Path, keep: &[String]) {
     let Ok(entries) = fs::read_dir(cache_root) else { return };
     for entry in entries.flatten() {
-        if entry.file_name() == keep || !entry.path().is_dir() {
+        let name = entry.file_name();
+        if keep.iter().any(|k| name == k.as_str()) || !entry.path().is_dir() {
             continue;
         }
         match fs::remove_dir_all(entry.path()) {
@@ -371,15 +377,19 @@ mod tests {
     }
 
     #[test]
-    fn prune_keeps_only_current_entry() {
+    fn prune_keeps_listed_entries() {
         let tmp = tempfile::tempdir().unwrap();
         let cache = tmp.path().join("cache");
         let red = import(&Source::Color { rgb: [255, 0, 0] }, &cache).unwrap().key().to_owned();
-        import(&Source::Color { rgb: [0, 0, 255] }, &cache).unwrap();
-        prune(&cache, &red);
-        let left: Vec<_> = fs::read_dir(&cache).unwrap().flatten().map(|e| e.file_name()).collect();
-        assert_eq!(left, [std::ffi::OsString::from(&red)]);
-        assert!(open_cached(&cache, &red).is_ok());
+        let blue = import(&Source::Color { rgb: [0, 0, 255] }, &cache).unwrap().key().to_owned();
+        import(&Source::Color { rgb: [0, 255, 0] }, &cache).unwrap();
+        prune(&cache, &[red.clone(), blue.clone()]);
+        let mut left: Vec<_> = fs::read_dir(&cache).unwrap().flatten().map(|e| e.file_name().into_string().unwrap()).collect();
+        left.sort();
+        let mut want = vec![red.clone(), blue];
+        want.sort();
+        assert_eq!(left, want);
+        assert!(open_cached(&cache, &red).is_ok() && is_cached(&cache, &red));
     }
 
     #[test]

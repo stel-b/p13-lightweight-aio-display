@@ -7,7 +7,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use aio_ipc::{MAX_REQUEST_LEN, PIPE_NAME, Request, Response, Source, Status};
+use aio_ipc::{LibraryItem, MAX_REQUEST_LEN, PIPE_NAME, PlayMode, Request, Response, Source, Status};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use tracing::{debug, info, warn};
@@ -35,31 +35,91 @@ impl Daemon {
         config.save(&self.config_path).map_err(|e| format!("saving config: {e:#}"))
     }
 
-    async fn set_source(&self, source: Source) -> Result<(), String> {
-        match &source {
-            Source::Image { path } | Source::Gif { path } | Source::Video { path }
-                if !path.is_absolute() =>
-            {
-                return Err(format!("path must be absolute: {}", path.display()));
-            }
-            _ => {}
+    fn check_path(source: &Source) -> Result<(), String> {
+        match source.path() {
+            Some(path) if !path.is_absolute() => Err(format!("path must be absolute: {}", path.display())),
+            _ => Ok(()),
         }
-        let mut config = self.config.lock().await;
+    }
+
+    /// Imports `source` (or reuses its cache) off the async thread.
+    async fn import(&self, source: &Source) -> Result<media::CachedMedia, String> {
         let (src, cache) = (source.clone(), self.cache_dir.clone());
-        let media = tokio::task::spawn_blocking(move || media::import(&src, &cache))
+        tokio::task::spawn_blocking(move || media::import(&src, &cache))
             .await
             .map_err(|e| format!("import task failed: {e}"))?
-            .map_err(|e| format!("{e:#}"))?;
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    /// Deletes cache entries that are neither current nor in the library.
+    fn prune(&self, config: &Config) {
+        let (cache, keep) = (self.cache_dir.clone(), config.keep_keys());
+        tokio::task::spawn_blocking(move || media::prune(&cache, &keep));
+    }
+
+    /// Puts `media` on the display and makes `source` the selected source.
+    fn show(&self, config: &mut Config, source: Source, media: media::CachedMedia) -> Result<(), String> {
         let key = media.key().to_owned();
         self.send(Command::SetMedia(media))?;
         info!(?source, "source set");
-
         config.source = Some(source);
-        config.cache_key = Some(key.clone());
-        self.save(&config)?;
-        let cache = self.cache_dir.clone();
-        tokio::task::spawn_blocking(move || media::prune(&cache, &key));
+        config.cache_key = Some(key);
+        self.save(config)?;
+        self.prune(config);
         Ok(())
+    }
+
+    async fn set_source(&self, source: Source) -> Result<(), String> {
+        Self::check_path(&source)?;
+        let mut config = self.config.lock().await;
+        let media = self.import(&source).await?;
+        self.show(&mut config, source, media)
+    }
+
+    async fn library_add(&self, source: Source) -> Result<(), String> {
+        Self::check_path(&source)?;
+        let mut config = self.config.lock().await;
+        let media = self.import(&source).await?;
+        let id = config.add_item(source.clone(), media.key().to_owned())?;
+        info!(id, ?source, "added to library");
+        self.save(&config)
+    }
+
+    async fn library_remove(&self, id: u64) -> Result<(), String> {
+        let mut config = self.config.lock().await;
+        let entry = config.remove_item(id)?;
+        info!(id, source = ?entry.source, "removed from library");
+        self.save(&config)?;
+        self.prune(&config);
+        Ok(())
+    }
+
+    async fn library_show(&self, id: u64) -> Result<(), String> {
+        let mut config = self.config.lock().await;
+        let entry = config.item(id).cloned().ok_or_else(|| format!("no library item #{id}"))?;
+        // Normally cached since it was added; re-import if the cache is gone.
+        let (cache, key) = (self.cache_dir.clone(), entry.cache_key.clone());
+        let cached = tokio::task::spawn_blocking(move || media::open_cached(&cache, &key).ok())
+            .await
+            .map_err(|e| format!("cache task failed: {e}"))?;
+        let media = match cached {
+            Some(m) => m,
+            None => {
+                let m = self.import(&entry.source).await?;
+                if let Some(e) = config.library.iter_mut().find(|e| e.id == id) {
+                    e.cache_key = m.key().to_owned(); // the file changed since it was added
+                }
+                m
+            }
+        };
+        self.show(&mut config, entry.source, media)
+    }
+
+    async fn set_play_mode(&self, mode: PlayMode) -> Result<(), String> {
+        let mut config = self.config.lock().await;
+        config.play_mode = mode;
+        info!(?mode, "play mode set");
+        self.save(&config)
     }
 
     async fn set_paused(&self, paused: bool) -> Result<(), String> {
@@ -89,9 +149,18 @@ impl Daemon {
     }
 
     async fn status(&self) -> Status {
-        let (source, brightness, rotation) = {
+        let (source, brightness, rotation, library, play_mode, current_item) = {
             let c = self.config.lock().await;
-            (c.source.clone(), c.brightness, c.rotation)
+            let library = c
+                .library
+                .iter()
+                .map(|e| LibraryItem {
+                    id: e.id,
+                    source: e.source.clone(),
+                    available: media::is_cached(&self.cache_dir, &e.cache_key) || e.source.path().is_some_and(|p| p.is_file()),
+                })
+                .collect();
+            (c.source.clone(), c.brightness, c.rotation, library, c.play_mode, c.current_item())
         };
         let s = lock(&self.shared);
         Status {
@@ -104,6 +173,9 @@ impl Daemon {
             brightness,
             rotation,
             firmware: s.firmware.clone(),
+            library,
+            play_mode,
+            current_item,
         }
     }
 
@@ -114,6 +186,10 @@ impl Daemon {
             Request::Resume => self.set_paused(false).await,
             Request::SetBrightness { value } => self.set_brightness(value).await,
             Request::SetRotation { degrees } => self.set_rotation(degrees).await,
+            Request::LibraryAdd { source } => self.library_add(source).await,
+            Request::LibraryRemove { id } => self.library_remove(id).await,
+            Request::LibraryShow { id } => self.library_show(id).await,
+            Request::SetPlayMode { mode } => self.set_play_mode(mode).await,
             Request::GetStatus => return Response::Status(self.status().await),
             Request::GetPreview => {
                 let jpeg = lock(&self.shared).preview.clone();

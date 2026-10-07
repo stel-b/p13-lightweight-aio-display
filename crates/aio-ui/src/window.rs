@@ -3,9 +3,7 @@
 //! Non-ASCII characters are written as escapes so no tool's code page can
 //! mangle them.
 
-use std::path::PathBuf;
-
-use aio_ipc::{DeviceState, Source, Status};
+use aio_ipc::{DeviceState, IMAGE_EXTENSIONS, PlayMode, Source, Status, VIDEO_EXTENSIONS};
 use eframe::egui;
 use egui::{Color32, RichText, TextureHandle, TextureOptions};
 
@@ -13,32 +11,20 @@ use crate::backend::{Action, Backend};
 use crate::tray::icon_rgba;
 
 const PREVIEW_SIZE: f32 = 240.0;
-const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "bmp", "webp"];
-const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "mkv", "webm", "mov", "avi", "wmv"];
 const DEGREE: &str = "\u{b0}";
 const DOT: &str = "\u{25cf}";
 const ELLIPSIS: &str = "\u{2026}";
 const RED: Color32 = Color32::from_rgb(0xE0, 0x6C, 0x5C);
 
-fn source_for(path: PathBuf) -> Source {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-    if ext == "gif" {
-        Source::Gif { path }
-    } else if VIDEO_EXTS.contains(&ext.as_str()) {
-        Source::Video { path }
-    } else {
-        Source::Image { path }
-    }
-}
-
-fn describe(source: &Source) -> String {
-    let name = |p: &PathBuf| p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into());
-    match source {
-        Source::Color { rgb: [r, g, b] } => format!("Color #{r:02x}{g:02x}{b:02x}"),
-        Source::Image { path } => format!("Image: {}", name(path)),
-        Source::Gif { path } => format!("GIF: {}", name(path)),
-        Source::Video { path } => format!("Video: {}", name(path)),
-    }
+/// File dialog for media files.
+fn media_dialog(title: &str) -> rfd::FileDialog {
+    let all: Vec<&str> = IMAGE_EXTENSIONS.iter().chain(VIDEO_EXTENSIONS).chain(&["gif"]).copied().collect();
+    rfd::FileDialog::new()
+        .set_title(title)
+        .add_filter("Images, GIFs and videos", &all)
+        .add_filter("Images", IMAGE_EXTENSIONS)
+        .add_filter("GIF", &["gif"])
+        .add_filter("Videos", VIDEO_EXTENSIONS)
 }
 
 struct AioApp {
@@ -62,16 +48,63 @@ impl AioApp {
     }
 
     fn pick_file(&self) {
-        let all: Vec<&str> = IMAGE_EXTS.iter().chain(VIDEO_EXTS).chain(&["gif"]).copied().collect();
-        let picked = rfd::FileDialog::new()
-            .set_title("Choose an image, GIF or video")
-            .add_filter("Images, GIFs and videos", &all)
-            .add_filter("Images", IMAGE_EXTS)
-            .add_filter("GIF", &["gif"])
-            .add_filter("Videos", VIDEO_EXTS)
-            .pick_file();
-        if let Some(path) = picked {
-            self.backend.send(Action::SetSource(source_for(path)));
+        if let Some(path) = media_dialog("Choose an image, GIF or video").pick_file() {
+            self.backend.send(Action::SetSource(Source::for_file(path)));
+        }
+    }
+
+    fn add_to_library(&self) {
+        // Each file is imported in turn by the command thread.
+        for path in media_dialog("Add to the library").pick_files().unwrap_or_default() {
+            self.backend.send(Action::LibraryAdd(Source::for_file(path)));
+        }
+    }
+
+    fn library_ui(&mut self, ui: &mut egui::Ui, status: &Status) {
+        ui.heading("Library");
+        ui.horizontal(|ui| {
+            ui.label("At startup show:");
+            for (mode, text, tip) in [
+                (PlayMode::Selected, "Last shown", "Keep showing what was shown last."),
+                (PlayMode::Random, "Random item", "Pick a random library item every time the computer starts."),
+            ] {
+                if ui.radio(status.play_mode == mode, text).on_hover_text(tip).clicked() && status.play_mode != mode {
+                    self.backend.send(Action::PlayMode(mode));
+                }
+            }
+        });
+        if status.library.is_empty() {
+            ui.weak("Empty. Add GIFs, videos or images to switch between them.");
+        }
+        egui::ScrollArea::vertical().max_height(150.0).auto_shrink([false, true]).show(ui, |ui| {
+            for item in &status.library {
+                ui.horizontal(|ui| {
+                    let current = status.current_item == Some(item.id);
+                    let mut text = RichText::new(item.source.label());
+                    if current {
+                        text = text.strong();
+                    }
+                    if !item.available {
+                        text = text.color(RED);
+                    }
+                    let path = item.source.path().map_or_else(String::new, |p| p.display().to_string());
+                    let tip = if item.available { path } else { format!("{path}\nFile and cached frames are missing.") };
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Remove").on_hover_text("Remove from the library (the file is kept)").clicked() {
+                            self.backend.send(Action::LibraryRemove(item.id));
+                        }
+                        if ui.add_enabled(!current && item.available, egui::Button::new("Show").small()).clicked() {
+                            self.backend.send(Action::LibraryShow(item.id));
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(text).truncate()).on_hover_text(tip);
+                        });
+                    });
+                });
+            }
+        });
+        if ui.button(format!("Add to library{ELLIPSIS}")).clicked() {
+            self.add_to_library();
         }
     }
 
@@ -130,7 +163,7 @@ impl AioApp {
     fn controls_ui(&mut self, ui: &mut egui::Ui, status: Option<&Status>, busy: bool) {
         ui.add_enabled_ui(status.is_some() && !busy, |ui| {
             ui.heading("Source");
-            ui.label(status.and_then(|s| s.source.as_ref()).map_or("Nothing set".into(), describe));
+            ui.label(status.and_then(|s| s.source.as_ref()).map_or("Nothing set".into(), Source::label));
             ui.horizontal(|ui| {
                 ui.color_edit_button_srgb(&mut self.color);
                 if ui.button("Show color").clicked() {
@@ -153,6 +186,11 @@ impl AioApp {
                     cmd.arg(path);
                 }
                 let _ = cmd.spawn();
+            }
+
+            if let Some(status) = status {
+                ui.add_space(8.0);
+                self.library_ui(ui, status);
             }
 
             ui.add_space(8.0);
@@ -195,7 +233,15 @@ impl eframe::App for AioApp {
             (s.status.clone(), s.busy, s.last_result.clone())
         };
         egui::CentralPanel::default().show(ui, |ui| {
-            Self::status_ui(ui, &status);
+            egui::ScrollArea::vertical().show(ui, |ui| self.page_ui(ui, &status, busy, &last_result));
+        });
+    }
+}
+
+impl AioApp {
+    fn page_ui(&mut self, ui: &mut egui::Ui, status: &Option<Result<Status, String>>, busy: Option<&str>, last_result: &Option<Result<(), String>>) {
+        {
+            Self::status_ui(ui, status);
             ui.add_space(10.0);
             self.preview_ui(ui);
             ui.add_space(10.0);
@@ -206,10 +252,10 @@ impl eframe::App for AioApp {
                     ui.spinner();
                     ui.label(text);
                 });
-            } else if let Some(Err(e)) = &last_result {
+            } else if let Some(Err(e)) = last_result {
                 ui.colored_label(RED, e);
             }
-        });
+        }
     }
 }
 
@@ -219,7 +265,7 @@ pub fn run() -> eframe::Result {
     let mut options = eframe::NativeOptions { renderer: eframe::Renderer::Glow, ..Default::default() };
     options.viewport = egui::ViewportBuilder::default()
         .with_title(crate::WINDOW_TITLE)
-        .with_inner_size([380.0, 600.0])
+        .with_inner_size([400.0, 800.0])
         .with_min_inner_size([340.0, 520.0])
         .with_icon(egui::IconData { rgba: icon_rgba(64), width: 64, height: 64 });
     eframe::run_native(crate::WINDOW_TITLE, options, Box::new(|cc| Ok(Box::new(AioApp::new(cc)))))

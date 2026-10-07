@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use aio_ipc::{Client, Request, Response, Source, Status};
+use aio_ipc::{Client, PlayMode, Request, Response, Source, Status};
 use egui::ColorImage;
 
 /// How often status is polled.
@@ -24,6 +24,10 @@ pub enum Action {
     Resume,
     Brightness(u8),
     Rotation(u16),
+    LibraryAdd(Source),
+    LibraryRemove(u64),
+    LibraryShow(u64),
+    PlayMode(PlayMode),
 }
 
 impl Action {
@@ -34,13 +38,19 @@ impl Action {
             Action::Resume => Request::Resume,
             Action::Brightness(value) => Request::SetBrightness { value: *value },
             Action::Rotation(degrees) => Request::SetRotation { degrees: *degrees },
+            Action::LibraryAdd(source) => Request::LibraryAdd { source: source.clone() },
+            Action::LibraryRemove(id) => Request::LibraryRemove { id: *id },
+            Action::LibraryShow(id) => Request::LibraryShow { id: *id },
+            Action::PlayMode(mode) => Request::SetPlayMode { mode: *mode },
         }
     }
 
     fn busy_text(&self) -> &'static str {
         match self {
-            Action::SetSource(Source::Video { .. }) => "Importing video\u{2026} (this can take a while)",
-            Action::SetSource(_) => "Importing\u{2026}",
+            Action::SetSource(Source::Video { .. }) | Action::LibraryAdd(Source::Video { .. }) => {
+                "Importing video\u{2026} (this can take a while)"
+            }
+            Action::SetSource(_) | Action::LibraryAdd(_) => "Importing\u{2026}",
             _ => "Applying\u{2026}",
         }
     }

@@ -39,11 +39,27 @@ pub async fn run(shutdown: impl Future<Output = ()>) -> Result<()> {
         Config::default()
     });
 
+    // Random mode: start with a random library item (normally: once per boot).
+    if config.play_mode == aio_ipc::PlayMode::Random {
+        let seed = std::hash::BuildHasher::hash_one(&std::collections::hash_map::RandomState::new(), std::time::SystemTime::now());
+        let playable = |e: &crate::config::LibraryEntry| {
+            media::is_cached(&cache_dir, &e.cache_key) || e.source.path().is_some_and(|p| p.is_file())
+        };
+        if let Some(entry) = config.pick_random(playable, seed).cloned() {
+            info!(id = entry.id, source = ?entry.source, "random mode: picked a library item");
+            config.source = Some(entry.source);
+            config.cache_key = Some(entry.cache_key);
+        }
+    }
+
     let media = restore(&config, &cache_dir);
     if let Some(m) = &media {
         info!(source = ?config.source, frames = m.frames().len(), paused = config.paused, "restored");
-        media::prune(&cache_dir, m.key());
         config.cache_key = Some(m.key().to_owned());
+        media::prune(&cache_dir, &config.keep_keys());
+    }
+    if let Err(e) = config.save(&config_path) {
+        warn!("saving config: {e:#}");
     }
 
     let (tx, rx) = mpsc::channel();

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use aio_ipc::{Client, DeviceState, Request, Response, Source, Status};
+use aio_ipc::{Client, DeviceState, PlayMode, Request, Response, Source, Status};
 use anyhow::{Context, Result, bail};
 
 const USAGE: &str = "usage: aio-cli <command>
@@ -11,6 +11,12 @@ commands:
   set color <name | #rrggbb>   show a solid color
   set image <path>             show a still image
   set gif <path>               play an animated GIF
+  set video <path>             play a video (needs video support)
+  library                      list the library (* = on the display)
+  library add <path>...        import files into the library
+  library remove <id>          remove an item (the file is kept)
+  library show <id>            show an item
+  mode <selected|random>       at startup show the last source, or a random library item
   brightness <0-100>           backlight level (0 turns the backlight off)
   rotate <0|90|180|270>        rotate the picture on the device
   pause                        stop sending frames (the display keeps the current one)
@@ -26,9 +32,33 @@ fn absolute_file(path: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn parse_id(id: &str) -> Result<u64> {
+    id.trim_start_matches('#').parse().with_context(|| format!("not a library id: {id:?}"))
+}
+
+/// The requests for a command line; `library add` sends one per file.
+fn parse_requests(args: &[String]) -> Result<Vec<Request>> {
+    let str_args: Vec<&str> = args.iter().map(String::as_str).collect();
+    if let ["library", "add", files @ ..] = str_args.as_slice() {
+        if files.is_empty() {
+            bail!("library add needs at least one file");
+        }
+        return files
+            .iter()
+            .map(|f| Ok(Request::LibraryAdd { source: Source::for_file(absolute_file(f)?) }))
+            .collect();
+    }
+    parse_request(args).map(|r| vec![r])
+}
+
 fn parse_request(args: &[String]) -> Result<Request> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     Ok(match args.as_slice() {
+        ["library"] | ["library", "list"] => Request::GetStatus,
+        ["library", "remove", id] => Request::LibraryRemove { id: parse_id(id)? },
+        ["library", "show", id] => Request::LibraryShow { id: parse_id(id)? },
+        ["mode", "selected"] => Request::SetPlayMode { mode: PlayMode::Selected },
+        ["mode", "random"] => Request::SetPlayMode { mode: PlayMode::Random },
         ["set", "color", c] => {
             let rgb = aio_ipc::parse_color(c).with_context(|| format!("unknown color {c:?}"))?;
             Request::SetSource { source: Source::Color { rgb } }
@@ -61,6 +91,25 @@ fn describe(source: &Source) -> String {
     }
 }
 
+fn mode_name(mode: PlayMode) -> &'static str {
+    match mode {
+        PlayMode::Selected => "selected (last shown)",
+        PlayMode::Random => "random library item at startup",
+    }
+}
+
+fn print_library(s: &Status) {
+    if s.library.is_empty() {
+        println!("library is empty (aio-cli library add <path>...)");
+    }
+    for item in &s.library {
+        let mark = if s.current_item == Some(item.id) { '*' } else { ' ' };
+        let missing = if item.available { "" } else { "  (missing)" };
+        println!("{mark} #{:<4} {}{missing}", item.id, describe(&item.source));
+    }
+    println!("mode: {}", mode_name(s.play_mode));
+}
+
 fn print_status(s: &Status) {
     let device = match s.device {
         DeviceState::Connected => "connected",
@@ -74,6 +123,8 @@ fn print_status(s: &Status) {
     println!("frames sent: {}", s.frames_sent);
     println!("brightness:  {}", s.brightness);
     println!("rotation:    {}", s.rotation.map_or("device default".into(), |d| format!("{d} degrees")));
+    println!("mode:        {}", mode_name(s.play_mode));
+    println!("library:     {} item(s)", s.library.len());
     if let Some(f) = &s.firmware {
         println!("firmware:    {f}");
     }
@@ -88,13 +139,27 @@ fn main() -> Result<()> {
         println!("{USAGE}");
         return Ok(());
     }
-    let request = parse_request(&args)?;
+    let requests = parse_requests(&args)?;
     let mut client = Client::connect().context("connecting to the daemon")?;
-    let response = client.request(&request).context("talking to the daemon")?;
+    for request in requests {
+        let response = client.request(&request).context("talking to the daemon")?;
+        handle_response(&args, &request, response)?;
+    }
+    Ok(())
+}
 
+fn handle_response(args: &[String], request: &Request, response: Response) -> Result<()> {
     match response {
-        Response::Ok => {}
-        Response::Error { message } => bail!(message),
+        Response::Ok => {
+            if let Request::LibraryAdd { source } = request {
+                println!("added {}", describe(source));
+            }
+        }
+        Response::Error { message } => match request {
+            Request::LibraryAdd { source } => bail!("{}: {message}", describe(source)),
+            _ => bail!(message),
+        },
+        Response::Status(status) if args[0] == "library" => print_library(&status),
         Response::Status(status) if args.get(1).is_some_and(|a| a == "--json") => {
             let line = aio_ipc::encode_line(&status);
             print!("{}", String::from_utf8_lossy(&line));
@@ -140,6 +205,21 @@ mod tests {
             panic!()
         };
         assert!(path.is_absolute());
+    }
+
+    #[test]
+    fn parses_library_commands() {
+        assert_eq!(parse_request(&args("library")).unwrap(), Request::GetStatus);
+        assert_eq!(parse_request(&args("library remove #3")).unwrap(), Request::LibraryRemove { id: 3 });
+        assert_eq!(parse_request(&args("library show 4")).unwrap(), Request::LibraryShow { id: 4 });
+        assert_eq!(parse_request(&args("mode random")).unwrap(), Request::SetPlayMode { mode: PlayMode::Random });
+        let adds = parse_requests(&args("library add Cargo.toml src/main.rs")).unwrap();
+        assert_eq!(adds.len(), 2);
+        assert!(adds.iter().all(|r| matches!(r, Request::LibraryAdd { source } if source.path().unwrap().is_absolute())));
+        assert!(parse_requests(&args("library add")).is_err());
+        assert!(parse_requests(&args("library add missing.gif")).is_err());
+        assert!(parse_request(&args("library show x")).is_err());
+        assert!(parse_request(&args("mode shuffle")).is_err());
     }
 
     #[test]

@@ -146,7 +146,13 @@ impl AioApp {
             if let Some(exe) = loop_finder
                 && ui.button(format!("Make a seamless video loop{ELLIPSIS}")).clicked()
             {
-                let _ = std::process::Command::new(exe).spawn();
+                // Crop preset for the pump, and the current video if one is playing.
+                let mut cmd = std::process::Command::new(exe);
+                cmd.arg("--for-display");
+                if let Some(Source::Video { path }) = status.and_then(|s| s.source.as_ref()) {
+                    cmd.arg(path);
+                }
+                let _ = cmd.spawn();
             }
 
             ui.add_space(8.0);

@@ -4,7 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use aio_loop::ffmpeg::{self, Tools};
+use aio_loop::crop::Crop;
+use aio_loop::ffmpeg::{self, CutOptions, Tools};
 use aio_loop::matcher::Thumb;
 use aio_loop::{PREVIEW_WIDTH, search};
 
@@ -51,7 +52,7 @@ fn finds_and_cuts_a_seamless_loop() {
     assert!((50..=90).contains(&best.start), "start outside the 2 s +- 1 s window: {best:?}");
 
     let out = tmp.path().join("orbit_loop.mp4");
-    ffmpeg::cut(&tools, &info, best.start, best.end, &out, false, |_| {}).unwrap();
+    ffmpeg::cut(&tools, &info, &CutOptions::frames(best.start, best.end), &out, |_| {}).unwrap();
     let cut = ffmpeg::probe(&tools, &out).unwrap();
     assert_eq!(cut.frames, best.frames(), "the loop must have exactly end - start frames");
 
@@ -63,6 +64,22 @@ fn finds_and_cuts_a_seamless_loop() {
     let seam = last.distance(&first);
     let normal_step = thumb(&tools, &info, best.start).distance(&thumb(&tools, &info, best.start + 1));
     assert!(seam <= normal_step * 1.5 + 0.002, "seam {seam} vs a normal frame step {normal_step}");
+}
+
+#[test]
+fn cuts_a_cropped_scaled_square() {
+    let Ok(tools) = ffmpeg::find_tools() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let info = ffmpeg::probe(&tools, &make_clip(&tools, tmp.path())).unwrap();
+    let out = tmp.path().join("square.mp4");
+    let crop = Crop::around(80.0, 60.0, 100.0, info.width, info.height);
+    let opts = CutOptions { crop: Some(crop), scale: Some(96), ..CutOptions::frames(30, 60) };
+    ffmpeg::cut(&tools, &info, &opts, &out, |_| {}).unwrap();
+    let cut = ffmpeg::probe(&tools, &out).unwrap();
+    assert_eq!((cut.width, cut.height, cut.frames), (96, 96, 30));
+
+    let too_big = CutOptions { crop: Some(Crop { x: 100, y: 0, size: 120 }), ..CutOptions::frames(0, 10) };
+    assert!(ffmpeg::cut(&tools, &info, &too_big, &out, |_| {}).is_err(), "crop outside the frame");
 }
 
 #[test]

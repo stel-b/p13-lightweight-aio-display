@@ -123,6 +123,22 @@ pub fn find(starts: &[Thumb], start0: u64, ends: &[Thumb], end0: u64, min_len: u
     picked
 }
 
+/// The score of one (start, end) pair from two short windows of thumbnails
+/// around them: `a[a_center]` and `b[b_center]` are the two frames, and up
+/// to `CONTEXT` neighbours on each side are compared too, as in [`find`].
+/// `None` if nothing overlaps.
+pub fn aligned_score(a: &[Thumb], a_center: usize, b: &[Thumb], b_center: usize) -> Option<f32> {
+    let (mut sum, mut n) = (0f32, 0u32);
+    for k in -CONTEXT..=CONTEXT {
+        let (i, j) = (a_center as i64 + k, b_center as i64 + k);
+        if (0..a.len() as i64).contains(&i) && (0..b.len() as i64).contains(&j) {
+            sum += a[i as usize].distance(&b[j as usize]);
+            n += 1;
+        }
+    }
+    (n > 0).then(|| sum / n as f32)
+}
+
 /// A human label for a score.
 pub fn quality(score: f32) -> &'static str {
     match score {
@@ -194,6 +210,20 @@ mod tests {
         let same_dir = find(&fwd, 0, &window(40, 20, 40), 40, 1, 1, 1)[0].score;
         let opposite = find(&fwd, 0, &rev, 40, 1, 1, 1)[0].score;
         assert!(same_dir < opposite, "{same_dir} vs {opposite}");
+    }
+
+    #[test]
+    fn aligned_score_matches_find() {
+        let starts = window(58, 5, 45);
+        let ends = window(103, 5, 45); // frame 105 = frame 60 + one period
+        let matching = aligned_score(&starts, 2, &ends, 2).unwrap();
+        let shifted = aligned_score(&starts, 2, &ends, 0).unwrap();
+        // One period apart is identical up to the test pattern's rounding.
+        assert!(matching < 0.002 && shifted > matching * 10.0, "{matching} vs {shifted}");
+        // Clipped windows (at the start of a video) still compare.
+        let clipped = aligned_score(&starts[2..], 0, &ends[2..], 0).unwrap();
+        assert!(clipped < 0.002 && shifted > clipped * 10.0, "{clipped} vs {shifted}");
+        assert_eq!(aligned_score(&[], 0, &ends, 0), None);
     }
 
     #[test]

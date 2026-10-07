@@ -9,7 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
-use aio_loop::ffmpeg::{self, VideoInfo};
+use aio_loop::crop::Crop;
+use aio_loop::ffmpeg::{self, CutOptions, VideoInfo};
 use aio_loop::matcher::quality;
 use aio_loop::{Stage, search, timecode};
 use anyhow::{Context, Result, bail};
@@ -17,25 +18,30 @@ use anyhow::{Context, Result, bail};
 const USAGE: &str = "usage:
   aio-loop-cli info <video>
   aio-loop-cli find <video> <start> <end> [--radius S]
-  aio-loop-cli cut  <video> <start-frame> <end-frame> [-o out.mp4] [--audio]
-  aio-loop-cli auto <video> <start> <end> [--radius S] [-o out.mp4] [--audio]
-times: seconds or m:ss(.mmm); cut keeps frames [start, end)";
+  aio-loop-cli cut  <video> <start-frame> <end-frame> [-o out.mp4] [--audio] [--crop X:Y:SIZE [--scale N]]
+  aio-loop-cli auto <video> <start> <end> [--radius S] [-o out.mp4] [--audio] [--crop X:Y:SIZE [--scale N]]
+times: seconds or m:ss(.mmm); cut keeps frames [start, end)
+--crop: square of SIZE px at X,Y (source pixels); --scale: output side, e.g. 480";
 
 struct Options {
     positional: Vec<String>,
     radius: f64,
     output: Option<PathBuf>,
     audio: bool,
+    crop: Option<Crop>,
+    scale: Option<u32>,
 }
 
 fn parse_options(args: &[String]) -> Result<Options> {
-    let mut o = Options { positional: Vec::new(), radius: 2.0, output: None, audio: false };
+    let mut o = Options { positional: Vec::new(), radius: 2.0, output: None, audio: false, crop: None, scale: None };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--radius" => o.radius = it.next().and_then(|v| v.parse().ok()).context("--radius needs seconds")?,
             "-o" | "--output" => o.output = Some(it.next().context("-o needs a path")?.into()),
             "--audio" => o.audio = true,
+            "--crop" => o.crop = Some(it.next().and_then(|v| Crop::parse(v)).context("--crop needs X:Y:SIZE")?),
+            "--scale" => o.scale = Some(it.next().and_then(|v| v.parse().ok()).context("--scale needs a size")?),
             _ => o.positional.push(arg.clone()),
         }
     }
@@ -59,9 +65,10 @@ fn print_info(info: &VideoInfo) {
     );
 }
 
-fn cut_with_progress(tools: &ffmpeg::Tools, info: &VideoInfo, start: u64, end: u64, out: &Path, audio: bool) -> Result<()> {
-    println!("writing {} ({} frames, {})", out.display(), end - start, timecode::format(info.rate.time_of(end - start)));
-    ffmpeg::cut(tools, info, start, end, out, audio, |_| {})?;
+fn cut_with_progress(tools: &ffmpeg::Tools, info: &VideoInfo, opts: &CutOptions, out: &Path) -> Result<()> {
+    let n = opts.end - opts.start;
+    println!("writing {} ({} frames, {})", out.display(), n, timecode::format(info.rate.time_of(n)));
+    ffmpeg::cut(tools, info, opts, out, |_| {})?;
     println!("done");
     Ok(())
 }
@@ -102,7 +109,8 @@ fn run_cli(args: &[String]) -> Result<()> {
             if args[0] == "auto" {
                 let best = s.candidates[0];
                 let out = o.output.clone().unwrap_or_else(|| ffmpeg::loop_path(&path));
-                cut_with_progress(&tools, &info, best.start, best.end, &out, o.audio)?;
+                let opts = CutOptions { audio: o.audio, crop: o.crop, scale: o.scale, ..CutOptions::frames(best.start, best.end) };
+                cut_with_progress(&tools, &info, &opts, &out)?;
             }
         }
         "cut" => {
@@ -113,7 +121,8 @@ fn run_cli(args: &[String]) -> Result<()> {
             let (start, end) = (frame(1)?, frame(2)?);
             let info = ffmpeg::probe(&tools, &path)?;
             let out = o.output.clone().unwrap_or_else(|| ffmpeg::loop_path(&path));
-            cut_with_progress(&tools, &info, start, end, &out, o.audio)?;
+            let opts = CutOptions { audio: o.audio, crop: o.crop, scale: o.scale, ..CutOptions::frames(start, end) };
+            cut_with_progress(&tools, &info, &opts, &out)?;
         }
         "-h" | "--help" | "help" => println!("{USAGE}"),
         other => bail!("unknown command {other:?}\n{USAGE}"),

@@ -7,6 +7,7 @@
 //! matching end frame itself is left out, because playback wraps to the
 //! start frame, which looks the same.
 
+pub mod crop;
 pub mod ffmpeg;
 pub mod matcher;
 pub mod timecode;

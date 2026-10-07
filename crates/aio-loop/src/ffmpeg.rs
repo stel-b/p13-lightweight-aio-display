@@ -13,6 +13,7 @@ use std::process::{Child, Command, Stdio};
 use anyhow::{Context, Result, bail};
 
 use crate::Rate;
+use crate::crop::Crop;
 
 /// Keeps ffmpeg from flashing a console window from the GUI.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -191,28 +192,56 @@ pub fn loop_path(input: &Path) -> PathBuf {
     input.with_file_name(format!("{stem}_loop.mp4"))
 }
 
-/// Writes frames `[start, end)` to `output` (H.264, CRF 18), reporting
-/// progress as a fraction 0..1.
-pub fn cut(
-    tools: &Tools,
-    info: &VideoInfo,
-    start: u64,
-    end: u64,
-    output: &Path,
-    with_audio: bool,
-    mut progress: impl FnMut(f32),
-) -> Result<()> {
+/// What to write: which frames, optional square crop, optional scaling of
+/// that square (e.g. to the pump's 480x480), and audio.
+#[derive(Debug, Clone, Copy)]
+pub struct CutOptions {
+    pub start: u64,
+    /// First frame not included.
+    pub end: u64,
+    pub crop: Option<Crop>,
+    /// Side of the output square; only used together with `crop`.
+    pub scale: Option<u32>,
+    pub audio: bool,
+}
+
+impl CutOptions {
+    pub fn frames(start: u64, end: u64) -> Self {
+        Self { start, end, crop: None, scale: None, audio: false }
+    }
+
+    fn filter(&self) -> Option<String> {
+        let crop = self.crop?;
+        Some(match self.scale {
+            Some(s) => format!("{},scale={s}:{s}:flags=lanczos", crop.filter()),
+            None => crop.filter(),
+        })
+    }
+}
+
+/// Writes the frames to `output` (H.264, CRF 18), reporting progress as a
+/// fraction 0..1.
+pub fn cut(tools: &Tools, info: &VideoInfo, opts: &CutOptions, output: &Path, mut progress: impl FnMut(f32)) -> Result<()> {
+    let (start, end) = (opts.start, opts.end);
     if end <= start {
         bail!("the loop must be at least one frame long");
+    }
+    if let Some(crop) = opts.crop
+        && !crop.fits(info.width, info.height)
+    {
+        bail!("the crop {crop:?} does not fit in the {}x{} video", info.width, info.height);
     }
     let count = end - start;
     let seconds = info.rate.time_of(count);
     let mut cmd = command(&tools.ffmpeg);
     cmd.args(["-y", "-v", "error", "-nostats", "-progress", "pipe:1", "-ss", &seek_to(info.rate, start), "-i"])
         .arg(&info.path)
-        .args(["-frames:v", &count.to_string(), "-t", &format!("{seconds:.6}"), "-sn", "-dn"])
-        .args(["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]);
-    if with_audio && info.has_audio {
+        .args(["-frames:v", &count.to_string(), "-t", &format!("{seconds:.6}"), "-sn", "-dn"]);
+    if let Some(filter) = opts.filter() {
+        cmd.args(["-vf", &filter]);
+    }
+    cmd.args(["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]);
+    if opts.audio && info.has_audio {
         cmd.args(["-c:a", "aac", "-b:a", "192k"]);
     } else {
         cmd.arg("-an");
